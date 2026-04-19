@@ -311,11 +311,20 @@ adapter:
 ### `tools/apify_scraper.py`
 
 Order of preference: **Apify → Binance public REST → synthetic random
-walk**. The Apify path is generic — it accepts a configurable actor ID
-(`APIFY_POLYMARKET_ACTOR`) and either ingests a structured dataset or
-parses raw Binance-style klines. The Binance fallback uses the
-unauthenticated `/api/v3/klines` endpoint (no key required) so the
-default install never goes "offline".
+walk**.
+
+The Apify path runs `apify/cheerio-scraper` (configurable via
+`APIFY_POLYMARKET_ACTOR`) against **Bitstamp**'s public OHLC endpoint
+and ships a custom `pageFunction` that extracts up to 1 000 1-minute
+bars in a single request. Bitstamp is used instead of Binance because
+**Apify Proxy IPs are blocked by Binance with HTTP 451** ("Service
+unavailable from a restricted location"); Bitstamp accepts them
+globally. The actor returns a Bitstamp `data.ohlc` array which is
+normalised into the shared `OHLCBar` shape.
+
+The Binance fallback uses the unauthenticated `/api/v3/klines` endpoint
+**from the local IP** (no key required, no geo-block) so the default
+install never goes "offline" even if the Apify quota is exhausted.
 
 ### `tools/kronos_predictor.py`
 
@@ -490,10 +499,14 @@ for some endpoints. The DEMO fallback is realistic and lets you
 verify every other stage of the pipeline without touching the
 venues.
 
-**Q. Why not use Binance via Apify?**
-You can — set `APIFY_TOKEN` and `APIFY_POLYMARKET_ACTOR` to a custom
-actor that scrapes Binance and returns a dataset. The `_items_to_bars`
-helper accepts both shaped dicts and raw kline arrays.
+**Q. Why does Apify route through Bitstamp instead of Binance?**
+Binance returns HTTP 451 ("Service unavailable from a restricted
+location") to every Apify Proxy IP, so an Apify-fronted Binance call
+yields a JSON error body, not OHLC. Bitstamp's public OHLC endpoint
+accepts Apify Proxy from anywhere and serves up to 1 000 bars in a
+single response, which matches the project's default `KLINE_LIMIT`.
+The local-IP Binance fallback is preserved for environments where
+Apify isn't configured.
 
 **Q. Does this run on macOS / Linux?**
 Yes. The Windows-specific UTF-8 stream reconfiguration in

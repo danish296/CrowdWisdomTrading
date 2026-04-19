@@ -61,10 +61,10 @@ class Settings:
     # Apify
     apify_token: str = field(default_factory=lambda: _env("APIFY_TOKEN"))
     apify_polymarket_actor: str = field(
-        default_factory=lambda: _env("APIFY_POLYMARKET_ACTOR", "apify/web-scraper")
+        default_factory=lambda: _env("APIFY_POLYMARKET_ACTOR", "apify/cheerio-scraper")
     )
     apify_kalshi_actor: str = field(
-        default_factory=lambda: _env("APIFY_KALSHI_ACTOR", "apify/web-scraper")
+        default_factory=lambda: _env("APIFY_KALSHI_ACTOR", "apify/cheerio-scraper")
     )
 
     # Risk
