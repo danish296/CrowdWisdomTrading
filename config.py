@@ -74,6 +74,29 @@ class Settings:
     )
     min_edge: float = field(default_factory=lambda: _envf("MIN_EDGE", 0.02))
 
+    # Predictor (statistical | kronos | kronos-mini | kronos-small | kronos-base)
+    predictor_default: str = field(
+        default_factory=lambda: _env("PREDICTOR_DEFAULT", "auto")
+    )
+    kronos_repo_path: str = field(
+        default_factory=lambda: _env("KRONOS_REPO_PATH", "")
+    )
+    kronos_model_size: str = field(
+        default_factory=lambda: _env("KRONOS_MODEL_SIZE", "small")
+    )
+    kronos_model_path: str = field(
+        default_factory=lambda: _env("KRONOS_MODEL_PATH", "")
+    )
+    kronos_tokenizer: str = field(
+        default_factory=lambda: _env(
+            "KRONOS_TOKENIZER", "NeoQuasar/Kronos-Tokenizer-base"
+        )
+    )
+    kronos_device: str = field(default_factory=lambda: _env("KRONOS_DEVICE", "auto"))
+    kronos_max_context: int = field(
+        default_factory=lambda: _envi("KRONOS_MAX_CONTEXT", 512)
+    )
+
     # Universe
     assets: List[str] = field(
         default_factory=lambda: _envlist("ASSETS", ["BTC", "ETH"])
@@ -105,3 +128,4 @@ class Settings:
 settings = Settings()
 settings.data_dir.mkdir(parents=True, exist_ok=True)
 settings.logs_dir.mkdir(parents=True, exist_ok=True)
+(settings.data_dir / "backtests").mkdir(parents=True, exist_ok=True)

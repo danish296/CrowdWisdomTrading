@@ -270,6 +270,193 @@ html, body {
   text-transform: uppercase; letter-spacing: .14em;
 }
 
+/* ---------- Nav ---------- */
+.nav {
+  display: flex; gap: 6px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px; letter-spacing: .14em;
+  text-transform: uppercase;
+}
+.nav-link {
+  text-decoration: none; color: var(--muted);
+  padding: 6px 10px; border: 1px solid transparent;
+  transition: color .15s ease, border-color .15s ease, background .15s ease;
+}
+.nav-link:hover { color: var(--ink); border-color: var(--rule); }
+.nav-link.active {
+  color: var(--ink); border-color: var(--ink);
+  background: var(--paper-2);
+}
+
+/* ---------- Backtest layout ---------- */
+.bt-grid {
+  position: relative; z-index: 1;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 32px;
+  padding: 36px clamp(20px, 5vw, 80px) 60px;
+}
+@media (min-width: 1100px) {
+  .bt-grid { grid-template-columns: 380px minmax(0, 1fr); gap: 48px; }
+}
+
+.bt-side { display: flex; flex-direction: column; gap: 24px; }
+.bt-results { display: flex; flex-direction: column; gap: 24px; }
+
+.bt-card {
+  background: var(--paper);
+  border: 1.5px solid var(--ink);
+  padding: 22px;
+  box-shadow: var(--shadow);
+}
+
+.bt-form {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px;
+  font-family: 'JetBrains Mono', monospace; font-size: 12px;
+}
+.bt-form label { display: flex; flex-direction: column; gap: 4px; }
+.bt-form label > span {
+  text-transform: uppercase; letter-spacing: .14em;
+  color: var(--muted); font-size: 10px;
+}
+.bt-form input, .bt-form select {
+  font-family: 'JetBrains Mono', monospace;
+  background: var(--paper-2); color: var(--ink);
+  border: 1px solid var(--rule);
+  padding: 8px 10px; font-size: 13px;
+  outline: none; transition: border-color .15s ease;
+}
+.bt-form input:focus, .bt-form select:focus { border-color: var(--amber); }
+.bt-form .btn { grid-column: 1 / -1; margin-top: 8px; }
+
+.bt-models { grid-column: 1 / -1; border: 1px dashed var(--rule); padding: 14px; }
+.bt-models legend {
+  font-family: 'JetBrains Mono', monospace; font-size: 10px;
+  text-transform: uppercase; letter-spacing: .18em; color: var(--muted);
+  padding: 0 6px;
+}
+#bt-models-list { display: flex; flex-direction: column; gap: 8px; }
+.model-pill {
+  display: grid; grid-template-columns: 18px 1fr;
+  gap: 10px; align-items: start; cursor: pointer;
+  padding: 8px 10px; border: 1px solid var(--rule);
+  background: var(--paper);
+  transition: border-color .15s ease, background .15s ease;
+}
+.model-pill:hover { border-color: var(--ink); }
+.model-pill input { margin-top: 3px; }
+.model-pill input[disabled] { cursor: not-allowed; }
+.pill-body { display: flex; flex-direction: column; gap: 2px; }
+.pill-name { font-weight: 700; }
+.pill-meta { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .12em; }
+.hint {
+  margin-top: 10px; font-size: 11px;
+  color: var(--muted); font-style: italic; line-height: 1.4;
+}
+.hint .mono { font-family: 'JetBrains Mono', monospace; font-style: normal; }
+
+/* error banner */
+.bt-error {
+  margin-top: 16px;
+  padding: 10px 12px;
+  border: 1px solid #b3261e;
+  background: #fff5f4;
+  color: #b3261e;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.bt-error strong { font-weight: 700; text-transform: uppercase; letter-spacing: .14em; }
+
+/* progress */
+.bt-progress { margin-top: 18px; }
+.bt-bar {
+  height: 6px; background: var(--paper-2);
+  border: 1px solid var(--rule); overflow: hidden;
+}
+#bt-bar-fill {
+  height: 100%; width: 0%;
+  background: var(--amber);
+  transition: width .25s ease;
+}
+.bt-progress-msg {
+  margin-top: 8px; font-family: 'JetBrains Mono', monospace;
+  font-size: 11px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .14em;
+}
+
+/* runs list */
+.bt-runs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.bt-runs li {
+  border: 1px solid var(--rule); padding: 10px 12px;
+  cursor: pointer; transition: border-color .15s ease, background .15s ease;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.bt-runs li:hover { border-color: var(--ink); background: var(--paper-2); }
+.bt-runs li.active { border-color: var(--amber); background: var(--paper-2); }
+.bt-runs .run-line {
+  font-family: 'JetBrains Mono', monospace; font-size: 11px;
+  text-transform: uppercase; letter-spacing: .14em;
+  color: var(--muted);
+}
+.bt-runs .run-name {
+  font-weight: 700; font-size: 14px; color: var(--ink);
+}
+
+/* report */
+.bt-report-head {
+  display: flex; justify-content: space-between; align-items: flex-end;
+  gap: 16px; margin-bottom: 6px;
+}
+.bt-actions { display: flex; gap: 8px; }
+.btn.ghost {
+  background: transparent; color: var(--ink);
+  border: 1.5px solid var(--ink);
+}
+.btn.ghost:hover { background: var(--ink); color: var(--paper); transform: none; }
+.btn.ghost.danger { border-color: var(--red); color: var(--red); }
+.btn.ghost.danger:hover { background: var(--red); color: var(--paper); }
+.bt-meta { font-size: 11px; color: var(--muted); margin: 4px 0 0; }
+
+.bt-table-wrap { overflow-x: auto; }
+.bt-table {
+  width: 100%; border-collapse: collapse;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+}
+.bt-table th, .bt-table td {
+  border-bottom: 1px solid var(--rule);
+  padding: 10px 8px; text-align: right;
+  white-space: nowrap;
+}
+.bt-table th:first-child, .bt-table td:first-child {
+  text-align: left; padding-left: 0; font-weight: 700;
+}
+.bt-table th {
+  text-transform: uppercase; letter-spacing: .12em;
+  font-size: 10px; color: var(--muted); font-weight: 600;
+  border-bottom: 1.5px solid var(--ink);
+}
+.bt-table tr.win td { background: rgba(46, 125, 50, .08); }
+.bt-table .pos { color: var(--green); }
+.bt-table .neg { color: var(--red); }
+
+.bt-pairwise {
+  margin-top: 14px; display: flex; flex-direction: column; gap: 6px;
+  font-family: 'JetBrains Mono', monospace; font-size: 12px;
+}
+.bt-pairwise .pw {
+  border-left: 3px solid var(--amber);
+  padding: 8px 12px; background: var(--paper-2);
+}
+
+.chart-wrap {
+  position: relative; width: 100%;
+  height: 360px;
+}
+
 /* ---------- Reduced motion ---------- */
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }

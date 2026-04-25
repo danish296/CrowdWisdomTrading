@@ -31,13 +31,15 @@ next move with **Kronos** (Markov + EMA fallback), sizes positions with the
 6. [Commands](#commands)
 7. [Live output (recorded)](#live-output-recorded)
 8. [Dashboard](#dashboard)
-9. [Architecture deep-dive](#architecture-deep-dive)
-10. [Scaling levers](#scaling-levers)
-11. [Logging, persistence, observability](#logging-persistence-observability)
-12. [Testing & smoke verification](#testing--smoke-verification)
-13. [Roadmap](#roadmap)
-14. [FAQ & honest caveats](#faq--honest-caveats)
-15. [Credits & License](#credits--license)
+9. [Backtest workbench](#backtest-workbench)
+10. [Kronos integration (local install)](#kronos-integration-local-install)
+11. [Architecture deep-dive](#architecture-deep-dive)
+12. [Scaling levers](#scaling-levers)
+13. [Logging, persistence, observability](#logging-persistence-observability)
+14. [Testing & smoke verification](#testing--smoke-verification)
+15. [Roadmap](#roadmap)
+16. [FAQ & honest caveats](#faq--honest-caveats)
+17. [Credits & License](#credits--license)
 
 ---
 
@@ -98,9 +100,19 @@ CrowdWisdomTrading/
 │   ├── risk_agent.py                     ← Kelly sizing + arbitrage scan
 │   ├── feedback_agent.py                 ← grades prior cycle + Hermes self-critique
 │   └── orchestrator.py                   ← the 60-second loop
+├── backtest/
+│   ├── data.py                           ← paginated Bitstamp + Binance fetchers (no synthetic)
+│   ├── engine.py                         ← walk-forward simulator, per-anchor trade ledger
+│   ├── metrics.py                        ← Brier / log-loss / hit / Sharpe / DD / DM
+│   └── store.py                          ← JSON persistence under data/backtests/<id>.json
 └── dashboard/
-    ├── templates/index.html              ← editorial-brutalist HTML
-    └── static/{styles.css, app.js}       ← Fraunces + JetBrains Mono · amber / ink / cream
+    ├── templates/
+    │   ├── index.html                    ← editorial-brutalist HTML (live desk)
+    │   └── backtest.html                 ← workbench: spec form + side-by-side report
+    └── static/
+        ├── styles.css                    ← Fraunces + JetBrains Mono · amber / ink / cream
+        ├── app.js                        ← live-desk vanilla JS
+        └── backtest.js                   ← Chart.js equity / calibration / track plots
 ```
 
 ## Quickstart (5 minutes)
@@ -173,6 +185,7 @@ Every value is optional. See `.env.example` for the full list.
 | `python main.py loop`       | Production-style continuous loop (Ctrl-C to stop).                     |
 | `python main.py status`     | Print recent hit-rate, total PnL, and number of stored cycles.         |
 | `python main.py dashboard`  | Boot the FastAPI dashboard at `http://127.0.0.1:8765`.                 |
+| `python main.py backtest`   | Walk-forward backtest on real OHLC, side-by-side per model. See below. |
 
 ## Live output (recorded)
 
@@ -263,11 +276,209 @@ amber accent, subtle paper grain, hard rules, no gradients. It surfaces:
 
 API endpoints exposed by `api.py`:
 
-| Method & path     | Purpose                                                   |
-| ----------------- | --------------------------------------------------------- |
-| `GET /`           | The dashboard HTML                                        |
-| `GET /api/state`  | JSON: stats + settings + latest cycle + audit tail        |
-| `GET /api/run`    | Trigger a one-shot cycle synchronously (~5–15 s)          |
+| Method & path                       | Purpose                                                   |
+| ----------------------------------- | --------------------------------------------------------- |
+| `GET /`                             | Live-desk HTML                                            |
+| `GET /backtest`                     | Backtest workbench HTML                                   |
+| `GET /api/state`                    | JSON: stats + settings + latest cycle + audit tail        |
+| `GET /api/run`                      | Trigger a one-shot cycle synchronously (~5-15 s)          |
+| `GET /api/predictors`               | List installed predictors (statistical / kronos-*)        |
+| `POST /api/backtest/run`            | Start a backtest in the background (returns `job_id`)     |
+| `GET /api/backtest/jobs/{job_id}`   | Poll progress / completion of a backtest job              |
+| `GET /api/backtest/list`            | List saved backtest runs (summary cards)                  |
+| `GET /api/backtest/{run_id}`        | Full payload (samples + equity curve + calibration bins)  |
+| `DELETE /api/backtest/{run_id}`     | Delete a saved run                                        |
+
+## Backtest workbench
+
+`/backtest` is a dedicated tab that runs **walk-forward backtests on real
+exchange data** and renders calibration, hit-rate, equity, and
+Diebold-Mariano significance side by side for every model you tick.
+
+It is the answer to *"prove the model works"*. No synthetic bars are ever
+substituted -- if the public OHLC fetch fails the run is aborted with a
+loud error rather than silently fabricating data, because a backtest run
+on fake bars is worse than no backtest.
+
+### What it does
+
+1. **Pulls real bars.** Bitstamp `/api/v2/ohlc` first (paginated to any
+   depth), with a Binance `/api/v3/klines` fallback. The data source is
+   recorded on every saved run.
+2. **Walks forward.** For each anchor index `i` from
+   `warmup .. len(bars) - horizon` step `step_bars`, it slices a
+   trailing window of `warmup_bars` and feeds it to every selected
+   predictor. There is no look-ahead at any point.
+3. **Reads realised outcomes.** The realised forward direction and
+   return are read from bars `i + horizon_bars`.
+4. **Constructs a counterfactual market.** Polymarket and Kalshi do not
+   expose tick-level historical books on their public APIs, so we price
+   each contract at a configurable anchor (default 0.50 with a 4-vol
+   noise term, which matches what these short-horizon BTC/ETH binary
+   markets empirically trade around). The same Kelly + min-edge filter
+   the live desk uses then sizes a hypothetical position.
+5. **Computes per-model metrics.**
+   - **Hit rate** (raw and confidence-banded)
+   - **Brier score** and **log-loss** (calibration)
+   - **Equity curve**, **total P&L**, **Sharpe**, **max drawdown**
+6. **Diebold-Mariano significance.** Every pair of models is compared on
+   per-prediction Brier loss with a two-sided Newey-West-corrected DM
+   test. The dashboard prints the verdict in plain English
+   (*"kronos-small beats statistical on Brier loss (significant,
+   p=0.012)"*).
+7. **Persists.** Every run lands as a single JSON file under
+   `data/backtests/<id>.json` and is reachable forever from the
+   workbench's history list.
+
+### Use it from the dashboard
+
+```bash
+python main.py dashboard
+# Open http://127.0.0.1:8765/backtest
+```
+
+Pick the asset, bar interval, horizon, history depth, warmup window,
+step, and the models you want to compare. Press *Run backtest*. A live
+progress bar tracks the job; when it finishes the report appears with:
+
+- a side-by-side **scoreboard table** with the best model marked `*`
+- the **equity curves** for each model on the same time axis
+- a **reliability diagram** (predicted P(up) vs realised frequency)
+- a **forecast track** showing each prediction with a green dot when the
+  call was right
+- the **Diebold-Mariano** verdict per pair
+
+Past runs are listed on the left so you can come back to any of them
+later or delete them.
+
+### Use it from the CLI
+
+```bash
+python main.py backtest --asset BTC --interval 5m --horizon-minutes 5 \
+  --days 14 --warmup 200 --step 1 --models statistical,kronos-small
+```
+
+The CLI prints the same scoreboard table to the terminal and saves the
+run under `data/backtests/`. Statistical-only is always available; the
+Kronos rows light up after you complete the install in the next
+section. **If you tick a Kronos model that isn't installed, the
+backtester records a per-anchor failure for that model rather than
+silently substituting the statistical baseline** -- that way the
+side-by-side comparison stays honest.
+
+### Verified end-to-end run
+
+Recorded from this codebase (Windows / Python 3.13, Binance fell back
+in for Bitstamp during a transient connection drop):
+
+```text
+backtest.data: bitstamp fetch failed ([WinError 10054] ...) -- trying binance
+backtest.data: binance returned 576 bars for BTC @ 5m
+backtest.engine: data_source=binance bars=576 interval=5m horizon_bars=1
+backtest.engine: completed eca484e73c68 in 1.8s (63 anchors x 1 models)
+
+                Backtest eca484e73c68 -- BTC 5m (horizon 5m)
+Model     N    Hit    Conf-Hit   Brier    LogLoss   PnL $     Sharpe   MaxDD %
+statist.. 63   0.460  nan (0)    0.2546   0.7024   -209.09   -45.86   -29.50
+
+Saved to data/backtests/eca484e73c68.json -- view in /backtest
+```
+
+The negative P&L is the **point**: the backtester has no incentive to
+make any model look good, and on this 2-day BTC slice the statistical
+baseline lost money. That's exactly the kind of objective evidence the
+workbench is built to surface.
+
+## Kronos integration (local install)
+
+Kronos is **not hosted as a managed inference service** -- the official
+[NeoQuasar/Kronos](https://github.com/NeoQuasar/Kronos) project ships
+weights on Hugging Face but you have to run the model yourself. The
+codebase is wired so that, once you complete the local install, the
+dashboard's predictor picker lights up and the backtester compares
+Kronos against the statistical baseline on real bars.
+
+### Step 1 -- install PyTorch + Hugging Face
+
+```bash
+# CPU-only is fine for kronos-mini and kronos-small.
+# For a GPU, follow https://pytorch.org/get-started/locally/ first.
+pip install torch>=2.2.0 transformers>=4.40.0 huggingface-hub>=0.23.0 einops>=0.7.0
+```
+
+### Step 2 -- clone the official Kronos repo
+
+```bash
+git clone https://github.com/NeoQuasar/Kronos.git
+pip install -r Kronos/requirements.txt
+```
+
+### Step 3 -- point the project at the clone
+
+In your `.env`:
+
+```env
+KRONOS_REPO_PATH=C:\absolute\path\to\Kronos    # PowerShell-friendly
+KRONOS_MODEL_SIZE=small                          # mini | small | base
+KRONOS_TOKENIZER=NeoQuasar/Kronos-Tokenizer-base
+KRONOS_DEVICE=auto                               # auto | cpu | cuda | cuda:0
+KRONOS_MAX_CONTEXT=512
+```
+
+`KRONOS_MODEL_PATH` is optional -- set it to a local directory to use
+weights you've already downloaded. Otherwise the project will pull from
+Hugging Face the first time it runs (`NeoQuasar/Kronos-<size>`).
+
+### Available sizes
+
+| Size  | Repo                          | Params  | Best for                                   |
+| ----- | ----------------------------- | ------- | ------------------------------------------ |
+| mini  | `NeoQuasar/Kronos-mini`       | 4.1 M   | Laptop CPU, fastest sanity check           |
+| small | `NeoQuasar/Kronos-small`      | 24.7 M  | Default. Solid CPU latency, GPU-friendly   |
+| base  | `NeoQuasar/Kronos-base`       | 102.3 M | Best forecasts, recommend GPU              |
+
+The dashboard's *Backtest* tab and the CLI both expose all three under
+`kronos-mini` / `kronos-small` / `kronos-base`. Tick whichever you
+installed; the rest stay greyed out as `not installed`.
+
+### How it loads
+
+`tools/kronos_predictor.py` tries two import strategies, in order:
+
+1. `from kronos import Kronos, KronosTokenizer, KronosPredictor` (in
+   case a fork has published a pip-style package).
+2. Prepend `KRONOS_REPO_PATH` to `sys.path` and
+   `from model import Kronos, KronosTokenizer, KronosPredictor` (the
+   canonical layout of the official NeoQuasar repo).
+
+The loaded `(predictor, model_id)` tuple is cached per `(size, device)`
+so a backtest with hundreds of anchors does not re-download or
+re-instantiate the model.
+
+### How predictions are formed
+
+Inside the predictor we:
+
+1. Convert our `PriceSeries` to the OHLCV+amount pandas DataFrame the
+   official `KronosPredictor.predict()` expects.
+2. Build `x_timestamp` from the input window and `y_timestamp` for the
+   forecast horizon (`pred_len` is computed from the bar size and the
+   requested horizon in minutes).
+3. Sample once with `T=1.0`, `top_p=0.9` (overridable via env) and read
+   the predicted close at `y_timestamp[-1]`.
+4. Squash the predicted % change through a logistic into `prob_up`,
+   then map to `UP / DOWN / FLAT`. The same `Prediction` shape comes
+   back out, so the orchestrator and the backtester are agnostic to
+   which model produced it.
+
+### Sanity-checking the install
+
+```bash
+python -c "from tools.kronos_predictor import list_available_predictors; \
+import json; print(json.dumps(list_available_predictors(), indent=2))"
+```
+
+Every Kronos row in the output should now show `"available": true`.
 
 ## Architecture deep-dive
 

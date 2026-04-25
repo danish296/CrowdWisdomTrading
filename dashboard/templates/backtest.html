@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CRYPTO·ADS — backtest</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,500;9..144,700;9..144,900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="/static/styles.css?v={{ asset_v }}" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+</head>
+<body>
+  <div class="grain" aria-hidden="true"></div>
+
+  <header class="masthead">
+    <div class="masthead-row">
+      <div class="badge">№ 002 · vol. I</div>
+      <nav class="nav">
+        <a class="nav-link" href="/">Desk</a>
+        <a class="nav-link active" href="/backtest">Backtest</a>
+      </nav>
+      <div class="dateline" id="dateline">— · —</div>
+    </div>
+
+    <h1 class="title">
+      <span class="title-line">Walk·Forward</span>
+      <span class="title-line italic">statistical &amp; Kronos, on real bars</span>
+    </h1>
+
+    <div class="rule"></div>
+
+    <div class="kpi-row">
+      <div class="kpi">
+        <span class="kpi-label">Bankroll</span>
+        <span class="kpi-value">${{ '%.0f' | format(bankroll) }}</span>
+      </div>
+      <div class="kpi">
+        <span class="kpi-label">Max·Kelly</span>
+        <span class="kpi-value">{{ '%.0f' | format(max_kelly * 100) }}%</span>
+      </div>
+      <div class="kpi">
+        <span class="kpi-label">Min·Edge</span>
+        <span class="kpi-value">{{ '%.1f' | format(min_edge * 100) }}%</span>
+      </div>
+      <div class="kpi">
+        <span class="kpi-label">Predictors</span>
+        <span class="kpi-value mono">
+          {% for p in predictors %}{{ p.id }}{% if p.available %}●{% else %}○{% endif %}{% if not loop.last %} · {% endif %}{% endfor %}
+        </span>
+      </div>
+    </div>
+  </header>
+
+  <main class="bt-grid">
+    <!-- LEFT: spec + history -->
+    <aside class="bt-side">
+      <section class="bt-card">
+        <header class="section-head">
+          <span class="section-eyebrow">spec</span>
+          <h2 class="section-title">Configure run</h2>
+        </header>
+
+        <form id="bt-form" class="bt-form" action="javascript:void(0);" onsubmit="return false;" novalidate>
+          <label>
+            <span>Asset</span>
+            <select name="asset">
+              <option>BTC</option>
+              <option>ETH</option>
+              <option>LTC</option>
+              <option>XRP</option>
+            </select>
+          </label>
+          <label>
+            <span>Bar interval</span>
+            <select name="interval">
+              <option value="1m">1m</option>
+              <option value="5m" selected>5m</option>
+              <option value="15m">15m</option>
+              <option value="1h">1h</option>
+            </select>
+          </label>
+          <label>
+            <span>Horizon (min)</span>
+            <input type="number" name="horizon_minutes" value="5" min="1" max="240" />
+          </label>
+          <label>
+            <span>History (days)</span>
+            <input type="number" name="days" value="14" min="1" max="365" />
+          </label>
+          <label>
+            <span>Warmup bars</span>
+            <input type="number" name="warmup_bars" value="200" min="60" max="2000" />
+          </label>
+          <label>
+            <span>Step (bars)</span>
+            <input type="number" name="step_bars" value="1" min="1" max="60" />
+          </label>
+          <label>
+            <span>Data source</span>
+            <select name="source">
+              <option value="auto">auto (Bitstamp first)</option>
+              <option value="bitstamp">Bitstamp only</option>
+              <option value="binance">Binance only</option>
+            </select>
+          </label>
+
+          <fieldset class="bt-models">
+            <legend>Models to compare</legend>
+            <div id="bt-models-list">
+              {% for p in predictors %}
+              <label class="model-pill">
+                <input type="checkbox" name="models" value="{{ p.id }}"
+                  {% if p.id == 'statistical' %}checked{% endif %}
+                  {% if not p.available and p.id != 'statistical' %}disabled{% endif %} />
+                <span class="pill-body">
+                  <span class="pill-name">{{ p.id }}</span>
+                  <span class="pill-meta">
+                    {% if p.available %}● ready{% else %}○ not installed{% endif %}
+                    {% if p.params_m %} · {{ p.params_m }}M params{% endif %}
+                    · {{ p.device }}
+                  </span>
+                </span>
+              </label>
+              {% endfor %}
+            </div>
+            <p class="hint">
+              Kronos rows are disabled until you clone <span class="mono">NeoQuasar/Kronos</span>
+              and set <span class="mono">KRONOS_REPO_PATH</span>. The statistical baseline
+              always runs — that's the point of side-by-side.
+            </p>
+          </fieldset>
+
+          <label>
+            <span>Counterfactual market price</span>
+            <input type="number" step="0.01" min="0.05" max="0.95" name="market_price_anchor" value="0.5" />
+          </label>
+          <label>
+            <span>Market price noise (σ)</span>
+            <input type="number" step="0.01" min="0.0" max="0.4" name="market_price_noise" value="0.04" />
+          </label>
+          <label>
+            <span>Label (optional)</span>
+            <input type="text" name="label" placeholder="e.g. BTC 5m, kronos vs baseline" />
+          </label>
+
+          <button id="bt-run" class="btn" type="button">Run backtest ↗</button>
+        </form>
+
+        <div id="bt-error" class="bt-error" hidden></div>
+
+        <div id="bt-progress" class="bt-progress" hidden>
+          <div class="bt-bar"><div id="bt-bar-fill"></div></div>
+          <div id="bt-progress-msg" class="bt-progress-msg">queued…</div>
+        </div>
+      </section>
+
+      <section class="bt-card">
+        <header class="section-head">
+          <span class="section-eyebrow">history</span>
+          <h2 class="section-title">Past runs</h2>
+        </header>
+        <ul id="bt-runs" class="bt-runs"></ul>
+      </section>
+    </aside>
+
+    <!-- RIGHT: results -->
+    <section class="bt-results">
+      <div id="bt-empty" class="empty">
+        Run a backtest, or pick a past run from the left to inspect it.
+      </div>
+
+      <article id="bt-report" hidden>
+        <header class="bt-report-head">
+          <div>
+            <span class="section-eyebrow">report</span>
+            <h2 class="section-title" id="bt-title">—</h2>
+            <p class="bt-meta mono" id="bt-meta">—</p>
+          </div>
+          <div class="bt-actions">
+            <a id="bt-download" class="btn ghost" download>Download JSON</a>
+            <button id="bt-delete" class="btn ghost danger">Delete</button>
+          </div>
+        </header>
+
+        <section class="bt-card">
+          <header class="section-head">
+            <span class="section-eyebrow">scoreboard</span>
+            <h2 class="section-title">Side by side</h2>
+          </header>
+          <div class="bt-table-wrap">
+            <table class="bt-table" id="bt-summary"></table>
+          </div>
+          <div id="bt-pairwise" class="bt-pairwise"></div>
+        </section>
+
+        <section class="bt-card">
+          <header class="section-head">
+            <span class="section-eyebrow">equity</span>
+            <h2 class="section-title">Cumulative P&amp;L on real bars</h2>
+          </header>
+          <div class="chart-wrap"><canvas id="chart-equity"></canvas></div>
+        </section>
+
+        <section class="bt-card">
+          <header class="section-head">
+            <span class="section-eyebrow">calibration</span>
+            <h2 class="section-title">Reliability diagram</h2>
+          </header>
+          <p class="hint">A perfectly calibrated model lies on the diagonal: when it says 70% UP,
+          UP happens 70% of the time. Bubble size is the bin count.</p>
+          <div class="chart-wrap"><canvas id="chart-calibration"></canvas></div>
+        </section>
+
+        <section class="bt-card">
+          <header class="section-head">
+            <span class="section-eyebrow">forecast track</span>
+            <h2 class="section-title">P(up) vs realised</h2>
+          </header>
+          <p class="hint">Predicted P(up) for each anchor, with green dots where the realised
+          direction matched the call.</p>
+          <div class="chart-wrap"><canvas id="chart-track"></canvas></div>
+        </section>
+      </article>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <span>walk-forward · real bars · Bitstamp / Binance · no synthetic fill</span>
+    <span>Diebold-Mariano · Brier · log-loss · Sharpe</span>
+  </footer>
+
+  <script src="/static/backtest.js?v={{ asset_v }}"></script>
+</body>
+</html>
