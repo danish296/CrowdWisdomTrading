@@ -111,6 +111,50 @@ html, body {
 .kpi-value.live { color: var(--green); }
 .kpi-value.off  { color: var(--muted); }
 
+/* The Predictor KPI is wider so the dropdown can breathe. */
+.kpi.kpi-predictor { grid-column: span 2; min-width: 240px; }
+@media (min-width: 1100px) {
+  .kpi.kpi-predictor { grid-column: span 3; }
+}
+
+/* Closed + open list: solid bg + explicit ink (fixes empty-looking control on
+   Windows / dark system theme when the selected value is not a real option, or
+   when transparent bg made text match the page). */
+.kpi-select {
+  appearance: auto;                 /* let native list paint reliably; chevron still OK on many UAs */
+  -webkit-appearance: auto;
+  min-height: 2.15rem;
+  line-height: 1.45;
+  width: 100%;
+  max-width: min(100%, 28rem);
+  background-color: var(--paper);
+  background-image: none;           /* avoid fighting native arrow on Windows */
+  border: 1px solid var(--rule);
+  color: var(--ink);
+  padding: 6px 10px 6px 8px;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  cursor: pointer;
+  color-scheme: light;              /* don’t let OS dark mode invert the closed control */
+  transition: border-color .15s ease, background-color .15s ease;
+}
+.kpi-select:hover { border-color: var(--amber); background-color: var(--paper-2); }
+.kpi-select:focus { outline: 2px solid var(--amber); outline-offset: 2px; }
+.kpi-select option {
+  color: var(--ink);
+  background: var(--paper);
+}
+.kpi-select option:disabled { color: var(--muted); font-style: italic; }
+
+.kpi-substatus {
+  font-size: 11px; letter-spacing: .04em;
+  color: var(--muted);
+}
+.kpi-substatus.live { color: var(--green); }
+.kpi-substatus.off  { color: var(--muted); }
+
 /* ---------- Grid ---------- */
 .grid {
   position: relative; z-index: 1;
@@ -195,6 +239,52 @@ html, body {
 .q .asset {
   font-style: italic; color: var(--amber-2);
 }
+
+/* prediction provenance strip on each decision card */
+.card-pred {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 0;
+  border-top: 1px dashed var(--rule);
+}
+.card-pred .pred-meta {
+  font-size: 11px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .12em;
+}
+
+/* model chips, used on cards and in the audit ticker */
+.model-chip {
+  display: inline-flex; align-items: center;
+  padding: 3px 8px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px; font-weight: 700;
+  letter-spacing: .14em; text-transform: uppercase;
+  border: 1px solid var(--rule);
+  white-space: nowrap;
+}
+.model-chip.model-kronos {
+  color: #2e1065;                  /* deep violet ink */
+  background: #ede9fe;             /* pale lilac paper */
+  border-color: #7c3aed;
+}
+.model-chip.model-stat {
+  color: #1f2937;
+  background: #f5f3ee;             /* paper-2 */
+  border-color: #9ca3af;
+}
+.model-chip.model-warn {
+  color: #7c2d12;
+  background: #fef3c7;
+  border-color: #d97706;
+}
+.model-chip.model-other {
+  color: var(--ink);
+  background: var(--paper-2);
+}
+
+/* directional colour for ticker DIR cells */
+.ev-dir.up   { color: var(--green); font-weight: 700; }
+.ev-dir.down { color: var(--red);   font-weight: 700; }
+.ev-dir.flat { color: var(--muted); font-weight: 700; }
 
 .metrics {
   display: grid; grid-template-columns: repeat(3, 1fr);

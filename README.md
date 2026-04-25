@@ -30,12 +30,12 @@ next move with **Kronos** (Markov + EMA fallback), sizes positions with the
 5. [Configuration](#configuration)
 6. [Commands](#commands)
 7. [Live output (recorded)](#live-output-recorded)
-8. [Dashboard](#dashboard)
+8. [Dashboard](#dashboard) — includes [implementation audit](#implementation-audit)
 9. [Backtest workbench](#backtest-workbench)
 10. [Kronos integration (local install)](#kronos-integration-local-install)
 11. [Architecture deep-dive](#architecture-deep-dive)
 12. [Scaling levers](#scaling-levers)
-13. [Logging, persistence, observability](#logging-persistence-observability)
+13. [Logging, persistence, observability](#logging-persistence-observability) — includes [predictor and Kronos console log reference](#predictor-and-kronos-console-log-reference)
 14. [Testing & smoke verification](#testing--smoke-verification)
 15. [Roadmap](#roadmap)
 16. [FAQ & honest caveats](#faq--honest-caveats)
@@ -175,6 +175,9 @@ Every value is optional. See `.env.example` for the full list.
 | `LOOP_SECONDS`       | `60`                                             | Cycle cadence                        |
 | `DASHBOARD_HOST`     | `127.0.0.1`                                      | FastAPI bind host                    |
 | `DASHBOARD_PORT`     | `8765`                                           | FastAPI bind port                    |
+| `PREDICTOR_DEFAULT`  | `auto`                                           | `auto` · `statistical` · `kronos` · `kronos-mini` / `small` / `base` · `ensemble` — used when the in-memory override is empty (after restart or `POST {"value":""}`) |
+
+See **Kronos integration** and **Dashboard** for `KRONOS_*` variables and the live-desk dropdown (which does not require editing `.env` for day-to-day switches).
 
 ## Commands
 
@@ -266,21 +269,49 @@ The dashboard is intentionally **editorial-brutalist** — Fraunces display
 serif paired with JetBrains Mono, warm cream paper / deep ink / electric
 amber accent, subtle paper grain, hard rules, no gradients. It surfaces:
 
-- live KPIs (model, universe, bankroll, Max-Kelly, Min-Edge, LLM/Apify
-  status)
-- the latest cycle's positions as oversized cards (venue, side, edge,
-  stake, EV, notes)
-- a track-record sidebar (hit rate, total PnL, graded trade count)
+- **Predictor (live-desk)**: a masthead **dropdown** to switch, without
+  restarting, between **Auto** (always **attempts Kronos** first, then
+  Markov+EMA if the neural stack is not installed or errors),
+  **Statistical only**, **Kronos mini / small / base** (options disabled
+  until the local install is detected), and **Ensemble** (averages
+  Kronos + statistical when both are available; falls back to statistical
+  with a clear tag if not). The **resolved engine** and the
+  `PREDICTOR_DEFAULT` / override story appear in a sub-line under the
+  control; hover the card for a full `reason` string. (Internal
+  `effective` keys like `kronos` or `stat` are **mapped to real `<option>`
+  values** in the API as `select_value` so the closed control is never
+  blank in Chrome / Edge on Windows — use `PREDICTOR_DEFAULT=kronos` in
+  `.env` and the UI still shows `kronos-<KRONOS_MODEL_SIZE>`.)
+- other KPIs: **LLM** (OpenRouter / Hermes id), **Universe** (assets), bankroll,
+  Max-Kelly, Min-Edge, **Hermes** and **Apify** live / demo or off
+- the latest cycle's **position cards** with a **model chip** (Kronos vs
+  statistical vs ensemble) plus horizon, P(up), and direction per
+  prediction
+- a track-record sidebar (hit rate, total P&L, graded trade count)
 - Hermes' latest written reflection
-- a live-wire **audit ticker** auto-refreshing every 7 s
+- a live-wire **audit ticker** (structured: prediction, prediction_leg
+  in ensemble mode, decision, `cycle_done`) — auto-refreshing every 7 s
 
-API endpoints exposed by `api.py`:
+**Runtime predictor API (no process restart).**
+
+| Method & path         | Body / notes | Purpose |
+| --------------------- | ------------ | ------- |
+| `GET /api/predictor`  | —            | Current status, `options[]` for the menu, `select_value` for the UI, `reason`, etc. |
+| `POST /api/predictor` | `{"value":"auto"}` … `""` clears override | In-memory override until restart; then `PREDICTOR_DEFAULT` applies again |
+
+Static assets use **cache-busted** URLs (`?v=<mtime>`) so the browser
+refetches `app.js` / `styles.css` / `backtest.js` when any file on disk
+changes.
+
+API endpoints exposed by `api.py` (full set):
 
 | Method & path                       | Purpose                                                   |
 | ----------------------------------- | --------------------------------------------------------- |
 | `GET /`                             | Live-desk HTML                                            |
 | `GET /backtest`                     | Backtest workbench HTML                                   |
-| `GET /api/state`                    | JSON: stats + settings + latest cycle + audit tail        |
+| `GET /api/state`                    | JSON: stats + settings + **predictor** + latest cycle + audit tail |
+| `GET /api/predictor`                | **Predictor status + options** (for the live switcher)     |
+| `POST /api/predictor`               | **Set/clear in-memory predictor override**                |
 | `GET /api/run`                      | Trigger a one-shot cycle synchronously (~5-15 s)          |
 | `GET /api/predictors`               | List installed predictors (statistical / kronos-*)        |
 | `POST /api/backtest/run`            | Start a backtest in the background (returns `job_id`)     |
@@ -288,6 +319,18 @@ API endpoints exposed by `api.py`:
 | `GET /api/backtest/list`            | List saved backtest runs (summary cards)                  |
 | `GET /api/backtest/{run_id}`        | Full payload (samples + equity curve + calibration bins)  |
 | `DELETE /api/backtest/{run_id}`     | Delete a saved run                                        |
+
+### Implementation audit
+
+| Area | Files / behaviour |
+| ---- | ----------------- |
+| **Predictor core** | `tools/kronos_predictor.py` — `resolve_predictor_choice()`, runtime override (`set_runtime_override` / `get_runtime_override`), **ensemble** path (avg of Kronos + statistical; honest tags), explicit Kronos in backtest still no silent swap. |
+| **Live agent** | `agents/prediction_agent.py` — in **ensemble** mode, audits `prediction_leg` for statistical + kronos so the ticker shows both legs, then the blended `prediction` event. |
+| **API** | `api.py` — `_predictor_status()` + `_ui_select_value()` for a valid `<select>`, `GET`/`POST /api/predictor`, `predictor` + `select_value` in `GET /api/state`, `asset_v` for static cache-bust. |
+| **Live desk UI** | `dashboard/templates/index.html` — Predictor `<select>`, `select_value` for `selected` option, Hermes/LLM/Apify labelling. `dashboard/static/app.js` — `renderPredictorKpi`, `setSelectToKnownOption`, `switchPredictor`, card model chips, structured audit lines. `dashboard/static/styles.css` — `.kpi-select` solid background, `color-scheme: light`, native appearance for Windows reliability. |
+| **Backtest UI** | `backtest.html` + `backtest.js` — form `action` neutralised, `type="button"` run, `bt-error` banner, per-section chart error isolation; Chart.js + adapter only (removed broken date-fns CDN). |
+| **Backtest engine** | `backtest/*` — real OHLC only, walk-forward, metrics, DM, JSON sanitization for strict JSON. |
+| **Config** | `config.py` / `.env.example` — `PREDICTOR_DEFAULT`, Kronos env vars, `data/backtests/`. |
 
 ## Backtest workbench
 
@@ -632,8 +675,53 @@ Sample audit events:
 {"ts": 1776618019.65, "event": "cycle_done",   "duration_s": 18.3, "n_markets": 4, "n_decisions": 4, "n_errors": 0}
 ```
 
+**Additional structured events (predictor & ensemble):**
+
+| `event`                 | When | Notable fields |
+| ----------------------- | ---- | -------------- |
+| `prediction_leg`        | Ensemble mode: each engine run separately for the audit ticker | `asset`, `horizon`, `direction`, `prob_up`, `model` (e.g. `markov-ema-fallback` or `kronos-small`) |
+| `prediction_leg_error`  | Ensemble mode: explicit `kronos` leg throws (import / OOM / etc.) | `asset`, `horizon`, `leg`, `error` (truncated) |
+
 The dashboard's audit ticker tails this file so you can watch the
 agents work in real time without leaving the browser.
+
+### Predictor and Kronos console log reference
+
+All of the following go to the **Rich** console (stdout) from logger
+`cwt.tool.predict` in `tools/kronos_predictor.py` unless noted. This is
+what you are reading when you run `python main.py dashboard` and trigger
+`GET /api/run` or the loop. **Levels:** `INFO` and `WARNING` are visible
+in the default configuration; the code does not hide Kronos failures in
+`DEBUG` after the first bar (repeat failures are `INFO` with a short
+reason).
+
+| Level | When it appears | Message pattern (abridged) | Meaning |
+| ----- | --------------- | -------------------------- | ------- |
+| `INFO` | Once per process, only if the desk / `PREDICTOR_DEFAULT` is **statistical** (or `stat` / `baseline`) and the call is the top-level predictor (not an inner `model=` audit leg) | `Predictor mode is statistical / baseline only — Kronos is **not** called …` | You asked for the Markov+EMA path only. No Kronos import is attempted. No Kronos "error" is expected. |
+| `WARNING` | First time in a process that **Auto** (default "prefer Kronos" path) calls `_kronos_predict` and it **throws** (import, HF, OOM, etc.) | `Kronos first-attempt failed (%s) — using Markov+EMA. Next failures each cycle: INFO with import/runtime reason. Fix: install torch, clone … NeoQuasar/Kronos, set KRONOS_REPO_PATH.` | The full exception is included in the log after the first `%s`. Explains that later horizons in the same run use shorter `INFO` lines. |
+| `INFO` | Every further **Auto** prediction in that process where Kronos still fails (typically once per asset × per horizon, e.g. 4 lines per cycle for BTC+ETH @ 5m+15m) | `auto: Kronos did not run → {ExceptionType}: {first ~200 chars of message} (statistical fallback for this bar)` | Confirms the bar used Markov+EMA because Kronos did not return a prediction. |
+| `WARNING` | First **ensemble** Kronos leg failure in a process | `ensemble: Kronos leg failed (%s) — blend uses statistical only until fixed.` | Full exception on first line; blend is tagged `ensemble:statistical-only` in `model_name` for that prediction. |
+| `INFO` | Further ensemble Kronos leg failures in the same process | `ensemble: Kronos leg failed again → {type}: {message}` | Same situation as the row above; shorter line. |
+| `INFO` | **Only if Kronos actually loads** (first time each process loads weights for a given size/device cache key) | `Kronos: loading tokenizer=… model=… device=… max_context=…` | Weights are being pulled from Hugging Face or a local `KRONOS_MODEL_PATH`. Not printed when Kronos never imports. |
+
+**Prediction agent line** (logger `cwt.orch` child `cwt.agent.predict` — `agents/prediction_agent.py`):
+
+| Level | Pattern | Meaning |
+| ----- | ------- | ------- |
+| `INFO` | `[agent.predict]· {ASSET} @5m|15m → {DIR} p_up=… conf=… ({model_name})` | One line per (asset, horizon). The `model_name` in parentheses is the source of truth: e.g. `kronos-small`, `markov-ema-fallback` (after a failed Kronos attempt in Auto), `ensemble:kronos-small+markov-ema-fallback` (blended), `ensemble:statistical-only` (Kronos leg failed in ensemble), `insufficient-data` (fewer than 30 bars). |
+
+**Typical order** when Kronos is **not** installed and the desk is on **Auto** (per cycle, after OHLC is fetched):
+
+1. One `WARNING` — `Kronos first-attempt failed (Could not import Kronos. … ModuleNotFoundError…)` (first bar only in that server process).
+2. For each remaining horizon: `INFO` — `· BTC @5m → … (markov-ema-fallback)` then `INFO` — `auto: Kronos did not run → ImportError: … (statistical fallback for this bar)` (or equivalent exception type).
+3. Risk / feedback lines from other agents (unchanged).
+
+**Typical order** when Kronos **is** installed and loads successfully:
+
+1. On first use of a (size, device) in cache: `INFO` — `Kronos: loading tokenizer=…`.
+2. `[agent.predict]· … (kronos-small)` (or the active size) without any `Kronos first-attempt failed` warning.
+
+**Uvicorn / FastAPI** lines (`INFO: 127.0.0.1 - "GET /api/…"`) are HTTP access logs from the dashboard polling `/api/state` and are not predictor events.
 
 ## Testing & smoke verification
 

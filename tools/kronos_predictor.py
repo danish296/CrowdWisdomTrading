@@ -74,6 +74,113 @@ _KRONOS_MODELS = {
 _DEFAULT_TOKENIZER = "NeoQuasar/Kronos-Tokenizer-base"
 
 
+# --------------------------------------------------------------------------- #
+# Runtime override (set by the dashboard, in-memory only)                     #
+# --------------------------------------------------------------------------- #
+#
+# The dashboard exposes POST /api/predictor so a user can switch engines on
+# the fly without editing .env or restarting. The override lives in this
+# module-level slot and wins over PREDICTOR_DEFAULT until cleared.
+#
+# Accepted values: "auto" | "statistical" | "kronos" | "kronos-mini" |
+# "kronos-small" | "kronos-base" | "ensemble" | "" (clear).
+
+_RUNTIME_OVERRIDE: Optional[str] = None
+_OVERRIDE_LOCK = threading.Lock()
+
+# First auto/ensemble Kronos failure also emits a long WARNING; later lines stay
+# at INFO so the Rich console (usually INFO+) always shows the story — we never
+# hide follow-ups in DEBUG, which is why it looked like "no Kronos error".
+_WARNED_AUTO_KRONOS_LONG = False
+_WARNED_ENSEMBLE_KRONOS_LONG = False
+_LOGGED_STATISTICAL_CHOICE = False
+
+
+def _warn_kronos_auto_fallback(exc: Exception) -> None:
+    global _WARNED_AUTO_KRONOS_LONG
+    msg_short = f"{type(exc).__name__}: {str(exc)[:200]}".replace("\n", " ")
+    if not _WARNED_AUTO_KRONOS_LONG:
+        _WARNED_AUTO_KRONOS_LONG = True
+        log.warning(
+            "Kronos first-attempt failed (%s) — using Markov+EMA. "
+            "Next failures each cycle: INFO with import/runtime reason. "
+            "Fix: install torch, clone https://github.com/NeoQuasar/Kronos, set KRONOS_REPO_PATH.",
+            exc,
+        )
+    else:
+        log.info("auto: Kronos did not run → %s (statistical fallback for this bar)", msg_short)
+
+
+def _warn_kronos_ensemble_fallback(exc: Exception) -> None:
+    global _WARNED_ENSEMBLE_KRONOS_LONG
+    msg_short = f"{type(exc).__name__}: {str(exc)[:200]}".replace("\n", " ")
+    if not _WARNED_ENSEMBLE_KRONOS_LONG:
+        _WARNED_ENSEMBLE_KRONOS_LONG = True
+        log.warning(
+            "ensemble: Kronos leg failed (%s) — blend uses statistical only until fixed.",
+            exc,
+        )
+    else:
+        log.info("ensemble: Kronos leg failed again → %s", msg_short)
+
+
+def _log_forced_statistical_once() -> None:
+    global _LOGGED_STATISTICAL_CHOICE
+    if _LOGGED_STATISTICAL_CHOICE:
+        return
+    _LOGGED_STATISTICAL_CHOICE = True
+    log.info(
+        "Predictor mode is statistical / baseline only — Kronos is **not** called "
+        "(no Kronos 'error' line is expected). Use Auto on the desk or PREDICTOR_DEFAULT=auto "
+        "to attempt Kronos first, then fall back on failure.",
+    )
+
+
+VALID_PREDICTOR_VALUES = {
+    "", "auto",
+    "statistical", "stat", "baseline",
+    "kronos", "kronos-mini", "kronos-small", "kronos-base",
+    "ensemble",
+}
+
+
+def set_runtime_override(value: Optional[str]) -> str:
+    """Set or clear the in-memory predictor override.
+
+    Returns the resolved canonical value (empty string == cleared).
+    Raises ValueError on an unknown value.
+    """
+    global _RUNTIME_OVERRIDE
+    cleaned = (value or "").strip().lower()
+    if cleaned not in VALID_PREDICTOR_VALUES:
+        raise ValueError(
+            f"Unknown predictor '{value}'. Allowed: "
+            + ", ".join(sorted(v for v in VALID_PREDICTOR_VALUES if v))
+        )
+    with _OVERRIDE_LOCK:
+        _RUNTIME_OVERRIDE = cleaned or None
+    return cleaned
+
+
+def get_runtime_override() -> Optional[str]:
+    with _OVERRIDE_LOCK:
+        return _RUNTIME_OVERRIDE
+
+
+def resolve_predictor_choice(model_arg: Optional[str] = None) -> str:
+    """Return the canonical predictor key the resolver will use right now.
+
+    Precedence: explicit `model_arg` > runtime override > PREDICTOR_DEFAULT
+    env var > "auto".
+    """
+    if model_arg:
+        return model_arg.strip().lower()
+    override = get_runtime_override()
+    if override:
+        return override
+    return (os.getenv("PREDICTOR_DEFAULT", "") or "auto").strip().lower()
+
+
 def predict_next_move(
     series: PriceSeries,
     horizon_minutes: int = 5,
@@ -83,9 +190,14 @@ def predict_next_move(
     """Return a direction + probability for the next `horizon_minutes`.
 
     `model` overrides the global default and accepts:
+        "auto"          always *attempt* Kronos first; on any failure use statistical
         "statistical"   force the Markov+EMA fallback
         "kronos"        use the configured Kronos size
         "kronos-mini" / "kronos-small" / "kronos-base"
+        "ensemble"      run BOTH (Kronos when available + statistical) and
+                        average their probabilities; stamps model_name as
+                        "ensemble:<a>+<b>". If Kronos isn't installed it
+                        degrades to statistical with a note in the rationale.
     """
     bars = series.bars
     if len(bars) < 30:
@@ -99,9 +211,17 @@ def predict_next_move(
             rationale="Need >= 30 bars to predict.",
         )
 
-    requested = (model or os.getenv("PREDICTOR_DEFAULT", "")).strip().lower()
+    requested = resolve_predictor_choice(model)
+
     if requested in ("statistical", "stat", "baseline"):
+        # Only the desk/CLI *mode* (no inner `model=` override) should print the
+        # "statistical only" explainer; ensemble's audit leg passes model=statistical.
+        if model is None:
+            _log_forced_statistical_once()
         return _statistical_predict(series, horizon_minutes)
+
+    if requested == "ensemble":
+        return _ensemble_predict(series, horizon_minutes)
 
     explicit_size: Optional[str] = None
     explicit_kronos = requested.startswith("kronos")
@@ -114,13 +234,59 @@ def predict_next_move(
         # this and counts it as a failure for that model.
         return _kronos_predict(series, horizon_minutes, explicit_size=explicit_size)
 
-    if _kronos_available():
-        try:
-            return _kronos_predict(series, horizon_minutes, explicit_size=explicit_size)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("Kronos predictor failed (%s) -- using statistical fallback", exc)
-
+    # `auto` (and any other resolved key that is not statistical / ensemble /
+    # explicit kronos-*): product contract is **Kronos first**, then Markov+EMA
+    # — we always call `_kronos_predict` and only fall back on exception.
+    try:
+        return _kronos_predict(series, horizon_minutes, explicit_size=explicit_size)
+    except Exception as exc:  # noqa: BLE001
+        _warn_kronos_auto_fallback(exc)
     return _statistical_predict(series, horizon_minutes)
+
+
+def _ensemble_predict(series: PriceSeries, horizon_minutes: int) -> Prediction:
+    """Run both engines and average their probabilities.
+
+    **Kronos is invoked first**; only if it succeeds do we also run the
+    statistical model for the 50/50 blend. If Kronos fails, we return a
+    single statistical prediction tagged ``ensemble:statistical-only``.
+    """
+    try:
+        kron = _kronos_predict(series, horizon_minutes)
+    except Exception as exc:  # noqa: BLE001
+        _warn_kronos_ensemble_fallback(exc)
+        stat = _statistical_predict(series, horizon_minutes)
+        stat.rationale = f"ensemble fallback (kronos error: {exc}) | " + stat.rationale
+        stat.model_name = "ensemble:statistical-only"
+        return stat
+
+    stat = _statistical_predict(series, horizon_minutes)
+
+    blended_p = 0.5 * float(stat.prob_up) + 0.5 * float(kron.prob_up)
+    blended_p = max(0.01, min(0.99, blended_p))
+
+    if blended_p > 0.55:
+        direction = "UP"
+    elif blended_p < 0.45:
+        direction = "DOWN"
+    else:
+        direction = "FLAT"
+
+    confidence = min(1.0, 0.5 * float(stat.confidence) + 0.5 * float(kron.confidence))
+
+    return Prediction(
+        asset=series.asset,
+        horizon_minutes=horizon_minutes,
+        direction=direction,  # type: ignore[arg-type]
+        prob_up=round(float(blended_p), 4),
+        confidence=round(float(confidence), 3),
+        model_name=f"ensemble:{kron.model_name}+{stat.model_name}",
+        rationale=(
+            f"kronos p_up={kron.prob_up:.3f} dir={kron.direction} | "
+            f"stat p_up={stat.prob_up:.3f} dir={stat.direction} | "
+            f"blended_p_up={blended_p:.3f}"
+        ),
+    )
 
 
 def list_available_predictors() -> List[dict]:

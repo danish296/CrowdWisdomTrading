@@ -46,7 +46,14 @@ from core.memory import (
     load_recent_feedback,
     total_pnl,
 )
-from tools.kronos_predictor import list_available_predictors
+from tools.kronos_predictor import (
+    _kronos_available,
+    _resolve_device,
+    get_runtime_override,
+    list_available_predictors,
+    resolve_predictor_choice,
+    set_runtime_override,
+)
 
 ROOT = Path(__file__).resolve().parent
 log = get_logger("api")
@@ -68,6 +75,98 @@ def get_orch() -> Orchestrator:
 # --------------------------------------------------------------------------- #
 # Pages                                                                       #
 # --------------------------------------------------------------------------- #
+
+
+def _ui_select_value(effective: str, kronos_size: str) -> str:
+    """Map internal `effective` keys to a value that always exists in the
+    dropdown. Browsers show a blank closed <select> when .value is set to a
+    non-matching option (e.g. PREDICTOR_DEFAULT=kronos with no kronos-*)."""
+    e = (effective or "auto").strip().lower()
+    if e in ("statistical", "stat", "baseline"):
+        return "statistical"
+    if e in ("auto", "ensemble"):
+        return e
+    if e == "kronos":
+        ks = (kronos_size or "small").strip().lower()
+        if ks in ("mini", "small", "base"):
+            return f"kronos-{ks}"
+        return "kronos-small"
+    if e in ("kronos-mini", "kronos-small", "kronos-base"):
+        return e
+    return "auto"
+
+
+def _predictor_status() -> Dict[str, Any]:
+    """What model the live desk will actually use right now.
+
+    Includes the env default, the runtime override (if any), what they
+    resolve to, whether Kronos is importable, the device, and the menu
+    of options the dashboard should render in the switcher.
+    """
+    env_default = (settings.predictor_default or "auto").strip().lower()
+    override = get_runtime_override() or ""
+    effective = resolve_predictor_choice() or "auto"
+    kronos_ok = _kronos_available()
+    size = (settings.kronos_model_size or "small").strip().lower()
+    device = _resolve_device()
+    select_value = _ui_select_value(effective, size)
+
+    # What the orchestrator will actually call right now, fully resolved.
+    if effective in ("statistical", "stat", "baseline"):
+        active = "statistical"
+        reason = (
+            f"override={override}" if override
+            else f"PREDICTOR_DEFAULT={env_default} (forced baseline)"
+        )
+    elif effective == "ensemble":
+        if kronos_ok:
+            active = f"ensemble:kronos-{size}+statistical"
+            reason = (
+                "ensemble -> running both engines, averaging P(up)"
+                if not override
+                else f"override=ensemble (kronos-{size} + statistical)"
+            )
+        else:
+            active = "ensemble:statistical-only"
+            reason = "ensemble requested but Kronos isn't installed -- using statistical only"
+    elif effective.startswith("kronos"):
+        size = effective.split("-", 1)[1] if "-" in effective else size
+        active = f"kronos-{size}"
+        if not kronos_ok:
+            reason = f"override={effective} -- WILL FAIL until Kronos is installed"
+        elif override:
+            reason = f"override={effective}"
+        else:
+            reason = f"PREDICTOR_DEFAULT={env_default}"
+    else:  # "auto" or unset
+        if kronos_ok:
+            active = f"kronos-{size}"
+            reason = f"auto -> Kronos installed, using size={size}"
+        else:
+            active = "statistical"
+            reason = "auto -> Kronos not installed, falling back to statistical"
+
+    options = [
+        {"value": "auto",          "label": "Auto (Kronos if installed)",         "available": True},
+        {"value": "statistical",   "label": "Statistical only (Markov + EMA)",    "available": True},
+        {"value": "kronos-mini",   "label": "Kronos mini (~4M params)",           "available": kronos_ok},
+        {"value": "kronos-small",  "label": "Kronos small (~25M params)",         "available": kronos_ok},
+        {"value": "kronos-base",   "label": "Kronos base (~100M params)",         "available": kronos_ok},
+        {"value": "ensemble",      "label": "Both side by side (ensemble)",       "available": True},
+    ]
+
+    return {
+        "env_default": env_default,
+        "override": override,
+        "effective": effective,
+        "select_value": select_value,
+        "active": active,
+        "kronos_available": kronos_ok,
+        "kronos_size": size,
+        "device": device,
+        "reason": reason,
+        "options": options,
+    }
 
 
 def _asset_version(*relpaths: str) -> str:
@@ -100,6 +199,7 @@ def _page_context() -> Dict[str, Any]:
         "llm_on": settings.has_llm,
         "apify_on": settings.has_apify,
         "asset_v": _asset_version("styles.css", "app.js", "backtest.js"),
+        "predictor": _predictor_status(),
     }
 
 
@@ -142,10 +242,38 @@ def state() -> JSONResponse:
                 "llm_on": settings.has_llm,
                 "apify_on": settings.has_apify,
             },
+            "predictor": _predictor_status(),
             "latest_cycle": cycles[-1] if cycles else None,
             "audit_tail": tail_audit(80),
         }
     )
+
+
+class PredictorChoice(BaseModel):
+    value: str = ""
+
+
+@app.get("/api/predictor")
+def get_predictor() -> JSONResponse:
+    """Current predictor status + the menu of choices the dashboard renders."""
+    return JSONResponse(_predictor_status())
+
+
+@app.post("/api/predictor")
+def set_predictor(choice: PredictorChoice) -> JSONResponse:
+    """Switch the predictor at runtime (no restart needed).
+
+    Body: {"value": "auto" | "statistical" | "kronos-mini" | "kronos-small"
+                  | "kronos-base" | "ensemble" | "" (clear)}
+    The override is in-memory only -- it lasts until the dashboard
+    process is restarted, at which point the env-default takes over.
+    """
+    try:
+        cleaned = set_runtime_override(choice.value)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    log.info("[api]predictor override set to %r", cleaned or "(cleared)")
+    return JSONResponse(_predictor_status())
 
 
 @app.get("/api/run")

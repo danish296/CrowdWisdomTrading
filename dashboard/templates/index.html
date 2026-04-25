@@ -32,8 +32,28 @@
     <div class="rule"></div>
 
     <div class="kpi-row">
+      <div class="kpi kpi-predictor" id="kpi-predictor-card" title="{{ predictor.reason }}">
+        <span class="kpi-label">Predictor</span>
+        <select id="predictor-switch" class="kpi-select mono"
+                aria-label="Switch the prediction engine"
+                title="Switch which model produces predictions in the next cycle">
+          {% for opt in predictor.options %}
+            <option value="{{ opt.value }}"
+              {% if opt.value == (predictor.select_value|default(predictor.effective)) %}selected{% endif %}
+              {% if not opt.available %}disabled{% endif %}>
+              {{ opt.label }}{% if not opt.available %} (install kronos){% endif %}
+            </option>
+          {% endfor %}
+        </select>
+        <span id="kpi-predictor"
+              class="kpi-substatus mono {% if predictor.kronos_available or predictor.active.startswith('kronos') or predictor.active.startswith('ensemble:kronos') %}live{% else %}off{% endif %}">
+          {% if predictor.active.startswith('kronos') or predictor.active.startswith('ensemble:kronos') %}● {{ predictor.active }}
+          {% elif predictor.kronos_available %}● {{ predictor.active }}
+          {% else %}○ {{ predictor.active }}{% endif %}
+        </span>
+      </div>
       <div class="kpi">
-        <span class="kpi-label">Model</span>
+        <span class="kpi-label">LLM</span>
         <span class="kpi-value mono">{{ model.split('/')[-1] }}</span>
       </div>
       <div class="kpi">
@@ -53,7 +73,7 @@
         <span class="kpi-value">{{ '%.1f' | format(min_edge * 100) }}%</span>
       </div>
       <div class="kpi">
-        <span class="kpi-label">LLM</span>
+        <span class="kpi-label">Hermes</span>
         <span class="kpi-value {% if llm_on %}live{% else %}off{% endif %}">
           {% if llm_on %}● live{% else %}○ demo{% endif %}
         </span>
